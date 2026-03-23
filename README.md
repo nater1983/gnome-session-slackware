@@ -10,7 +10,7 @@ This requires **elogind** for session/seat management.
 
 # Applying the changes
 
-Simply clone this repository and copy/replace its content to gnome-session source code, a build it normally.
+Simply clone this repository and copy/replace its content to gnome-session source code, and build it normally.
 
 # How it works
 
