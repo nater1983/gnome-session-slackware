@@ -1,0 +1,65 @@
+#!/bin/sh
+# gnome-session-stop - Stop GNOME session components for sysvinit systems
+# Sends SIGTERM to all session processes tracked by PID files
+
+PIDDIR="${XDG_RUNTIME_DIR}"
+if [ -z "$PIDDIR" ]; then
+    echo "XDG_RUNTIME_DIR is not set" >&2
+    exit 1
+fi
+
+kill_by_pidfile() {
+    pidfile="$PIDDIR/$1.pid"
+    if [ -f "$pidfile" ]; then
+        pid=$(cat "$pidfile" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill "$pid" 2>/dev/null
+        fi
+        rm -f "$pidfile"
+    fi
+}
+
+# Stop GSD daemons first (they depend on gnome-shell)
+for daemon in \
+    gsd-a11y-settings \
+    gsd-color \
+    gsd-datetime \
+    gsd-housekeeping \
+    gsd-keyboard \
+    gsd-media-keys \
+    gsd-power \
+    gsd-print-notifications \
+    gsd-rfkill \
+    gsd-screensaver-proxy \
+    gsd-sharing \
+    gsd-sound \
+    gsd-usb-protection \
+    gsd-xsettings \
+; do
+    kill_by_pidfile "$daemon"
+done
+
+# Stop gnome-shell
+kill_by_pidfile gnome-shell
+
+# Stop session D-Bus service
+kill_by_pidfile gnome-session-service
+
+# Stop session monitor
+kill_by_pidfile gnome-session-monitor
+
+# Clean up the leader FIFO
+rm -f "$PIDDIR/gnome-session-leader-fifo"
+
+# Give processes a moment to terminate, then force-kill stragglers
+sleep 1
+for pidfile in "$PIDDIR"/gsd-*.pid "$PIDDIR"/gnome-shell.pid \
+               "$PIDDIR"/gnome-session-service.pid "$PIDDIR"/gnome-session-monitor.pid; do
+    if [ -f "$pidfile" ]; then
+        pid=$(cat "$pidfile" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            kill -9 "$pid" 2>/dev/null
+        fi
+        rm -f "$pidfile"
+    fi
+done

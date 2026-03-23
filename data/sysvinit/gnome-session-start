@@ -1,0 +1,92 @@
+#!/bin/sh
+# gnome-session-start - Start GNOME session components for sysvinit systems
+# Usage: gnome-session-start <session_type> <session_name>
+#   session_type: wayland
+#   session_name: gnome, gnome-login, gnome-initial-setup
+
+SESSION_TYPE="${1:-wayland}"
+SESSION_NAME="${2:-gnome}"
+
+PIDDIR="${XDG_RUNTIME_DIR}"
+if [ -z "$PIDDIR" ]; then
+    echo "XDG_RUNTIME_DIR is not set" >&2
+    exit 1
+fi
+
+export XDG_CURRENT_DESKTOP=GNOME
+export XDG_SESSION_TYPE="$SESSION_TYPE"
+
+# Ensure the session D-Bus address is set
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+    if [ -S "$XDG_RUNTIME_DIR/bus" ]; then
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
+    fi
+fi
+
+# Add flatpak export paths if available
+for d in "$HOME/.local/share/flatpak/exports/share" "/var/lib/flatpak/exports/share"; do
+    if [ -d "$d" ]; then
+        XDG_DATA_DIRS="${XDG_DATA_DIRS:+$XDG_DATA_DIRS:}$d"
+    fi
+done
+export XDG_DATA_DIRS
+
+write_pid() {
+    echo "$2" > "$PIDDIR/$1.pid"
+}
+
+# Start session D-Bus service
+/usr/libexec/gnome-session-service --session="$SESSION_NAME" &
+write_pid gnome-session-service $!
+
+# Start session monitor (reads the leader FIFO)
+/usr/libexec/gnome-session-ctl --monitor &
+write_pid gnome-session-monitor $!
+
+# Wait for the gnome-session-monitor to claim its bus name
+gdbus wait --session org.gnome.SessionManager
+
+# Start gnome-shell
+SHELL_ARGS="--wayland"
+if [ "$SESSION_NAME" = "gnome-login" ]; then
+	SHELL_ARGS="--wayland --mode=gdm"
+fi
+
+/usr/bin/gnome-shell $SHELL_ARGS &
+SHELL_PID=$!
+write_pid gnome-shell $SHELL_PID
+
+# Wait for the gnome-shell to register its interface
+gdbus wait --session org.gnome.Shell
+
+# Start GNOME Settings Daemon components
+GSD_DAEMONS="
+    gsd-a11y-settings
+    gsd-color
+    gsd-datetime
+    gsd-housekeeping
+    gsd-keyboard
+    gsd-media-keys
+    gsd-power
+    gsd-print-notifications
+    gsd-rfkill
+    gsd-screensaver-proxy
+    gsd-sharing
+    gsd-sound
+    gsd-usb-protection
+"
+
+for daemon in $GSD_DAEMONS; do
+    if [ -x "/usr/libexec/$daemon" ]; then
+        /usr/libexec/$daemon &
+        write_pid "$daemon" $!
+    fi
+done
+
+# Signal session initialization complete
+/usr/libexec/gnome-session-ctl --signal-init
+
+# Wait for gnome-shell to exit
+# When gnome-shell exits, the session is effectively over
+wait $SHELL_PID
+exit $?
