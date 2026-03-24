@@ -7,6 +7,45 @@
 SESSION_TYPE="${1:-wayland}"
 SESSION_NAME="${2:-gnome}"
 
+# Source system profile scripts, exactly as GDM's old wayland-session script did.
+# Dot-sourcing preserves all GDM-passed variables (XDG_SESSION_ID, XDG_SEAT, etc.)
+# and adds the profile vars (LANG, HOSTNAME, XKB_DEFAULT_*, etc.) on top.
+case $SHELL in
+    */bash)
+        [ -z "$BASH" ] && exec "$SHELL" "$0" "$@"
+        set +o posix
+        [ -f /etc/profile ] && . /etc/profile
+        if [ -f "$HOME/.bash_profile" ]; then
+            . "$HOME/.bash_profile"
+        elif [ -f "$HOME/.bash_login" ]; then
+            . "$HOME/.bash_login"
+        elif [ -f "$HOME/.profile" ]; then
+            . "$HOME/.profile"
+        fi
+        ;;
+    */zsh)
+        [ -z "$ZSH_NAME" ] && exec "$SHELL" "$0" "$@"
+        [ -d /etc/zsh ] && zdir=/etc/zsh || zdir=/etc
+        zhome=${ZDOTDIR:-$HOME}
+        [ -f $zdir/zprofile ] && . $zdir/zprofile
+        [ -f $zhome/.zprofile ] && . $zhome/.zprofile
+        ;;
+    *)
+        [ -f /etc/profile ] && . /etc/profile
+        [ -f "$HOME/.profile" ] && . "$HOME/.profile"
+        ;;
+esac
+
+# Apply the user's locale region from GNOME Settings (mirrors old /usr/bin/gnome-session).
+REGION=$(G_MESSAGES_DEBUG='' gsettings get org.gnome.system.locale region 2>/dev/null)
+REGION=${REGION#\'}
+REGION=${REGION%\'}
+if [ -n "$REGION" ] && [ "$LANG" != "$REGION" ]; then
+    export LC_NUMERIC=$REGION LC_TIME=$REGION LC_MONETARY=$REGION
+    export LC_PAPER=$REGION LC_ADDRESS=$REGION LC_TELEPHONE=$REGION
+    export LC_MEASUREMENT=$REGION
+fi
+
 if [ -z "$XDG_RUNTIME_DIR" ]; then
     echo "XDG_RUNTIME_DIR is not set" >&2
     exit 1
@@ -61,6 +100,33 @@ write_pid gnome-shell $SHELL_PID
 
 # Wait for the gnome-shell to register its interface
 gdbus wait --session org.gnome.Shell
+
+# In GNOME 49+ on non-systemd, gnome-shell propagates display variables via
+# systemctl --user import-environment, which is a no-op on sysvinit.
+# Detect them from the filesystem and export to the dbus activation environment
+# so that apps launched by gnome-shell (e.g. Ptyxis) inherit them.
+if [ -z "$WAYLAND_DISPLAY" ]; then
+    for _n in 0 1 2 3; do
+        [ -S "$XDG_RUNTIME_DIR/wayland-$_n" ] && export WAYLAND_DISPLAY="wayland-$_n" && break
+    done
+    unset _n
+fi
+if [ -z "$DISPLAY" ]; then
+    for _n in 0 1 2 3; do
+        [ -S "/tmp/.X11-unix/X$_n" ] && export DISPLAY=":$_n" && break
+    done
+    unset _n
+fi
+if [ -z "$XAUTHORITY" ]; then
+    for _f in "$XDG_RUNTIME_DIR"/.mutter-Xwaylandauth.*; do
+        [ -f "$_f" ] && export XAUTHORITY="$_f" && break
+    done
+    unset _f
+fi
+# Push the full session environment (locale, display, profile vars) to the
+# dbus activation environment. All display vars are now set above, so --all
+# is safe and avoids having to maintain an explicit list.
+dbus-update-activation-environment --all
 
 # Start GNOME Settings Daemon components
 GSD_DAEMONS="
