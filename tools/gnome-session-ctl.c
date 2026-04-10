@@ -50,7 +50,7 @@ async_run_cmd (gchar **argv, GError **error)
 static gboolean
 sysvinit_run_session_stop (GError **error)
 {
-        g_autofree char *stop_script = g_build_filename ("/usr/libexec",
+        g_autofree char *stop_script = g_build_filename (LIBEXECDIR,
                                                          "gnome-session-stop",
                                                          NULL);
         gchar *argv[] = { stop_script, NULL };
